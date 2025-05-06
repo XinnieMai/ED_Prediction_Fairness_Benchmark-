@@ -1,0 +1,708 @@
+---
+title: "Autoscore"
+author: "Xinnie Mai"
+date: "2025-05-06"
+output: html_document
+---
+```{r}
+library(AutoScore)
+
+data("sample_data")
+data("sample_data_survival")
+data("sample_data_ordinal")
+```
+
+```{r}
+names(sample_data)[names(sample_data) == "Mortality_inpatient"] <- "label"
+
+# Sample data with survival and ordinal outcome already has appropriate variable 
+# names:
+names(sample_data_survival)
+```
+
+```{r}
+check_data(sample_data)
+```
+
+```{r}
+check_data_ordinal(sample_data_ordinal)
+```
+
+
+Binary Outcome 
+```{r}
+library(AutoScore)
+library(knitr)
+data("sample_data")
+names(sample_data)[names(sample_data) == "Mortality_inpatient"] <- "label"
+compute_descriptive_table(sample_data)
+```
+
+```{r}
+uni_table <- compute_uni_variable_table(sample_data)
+kable(uni_table)
+```
+
+```{r}
+multi_table <- compute_multi_variable_table(sample_data)
+kable(multi_table)
+```
+
+Survivial Outcome
+```{r}
+data("sample_data_survival")
+compute_descriptive_table(sample_data_survival)
+```
+
+```{r}
+uni_table_survival <- compute_uni_variable_table_survival(sample_data_survival)
+kable(uni_table_survival)
+```
+
+```{r}
+multi_table_survival <- compute_multi_variable_table_survival(sample_data_survival)
+kable(multi_table_survival)
+```
+
+Ordinal Outcome
+```{r}
+data("sample_data_ordinal")
+compute_descriptive_table(sample_data_ordinal)
+```
+
+```{r}
+link <- "logit"
+uni_table_ordinal <- compute_uni_variable_table_ordinal(sample_data_ordinal, link = link)
+kable(uni_table_ordinal)
+```
+
+```{r}
+#multi_table_ordinal <- compute_multi_variable_table_ordinal(sample_data_ordinal, link = link)
+#kable(multi_table_ordinal)
+```
+
+```{r}
+library(AutoScore)
+data("sample_data")
+names(sample_data)[names(sample_data) == "Mortality_inpatient"] <- "label"
+check_data(sample_data)
+```
+
+```{r}
+set.seed(4)
+out_split <- split_data(data = sample_data, ratio = c(0.7, 0.1, 0.2), 
+                        strat_by_label = FALSE)
+train_set <- out_split$train_set
+validation_set <- out_split$validation_set
+test_set <- out_split$test_set
+```
+
+rf
+```{r}
+ranking <- AutoScore_rank(train_set = train_set, method = "rf", ntree = 100)
+```
+
+```{r}
+ranking <- AutoScore_rank(train_set = train_set, method = "auc", 
+                          validation_set = validation_set)
+```
+select variables with parsimony plot
+```{r}
+AUC <- AutoScore_parsimony(
+  train_set = train_set, validation_set = validation_set,
+  rank = ranking, max_score = 100, n_min = 1, n_max = 20,
+  categorize = "quantile", quantiles = c(0, 0.05, 0.2, 0.8, 0.95, 1),
+  auc_lim_min = 0.5, auc_lim_max = "adaptive"
+)
+```
+```{r}
+write.csv(data.frame(AUC), file = "AUC.csv")
+```
+
+```{r}
+# Example 1: Top 6 variables are selected
+num_var <- 6
+final_variables <- names(ranking[1:num_var])
+
+# Example 2: Top 9 variables are selected
+num_var <- 9
+final_variables <- names(ranking[1:num_var])
+
+# Example 3: Top 6 variables, the 9th and 10th variable are selected
+num_var <- 6
+final_variables <- names(ranking[c(1:num_var, 9, 10)])
+```
+
+generate initial scores with final variables
+```{r}
+cut_vec <- AutoScore_weighting( 
+  train_set = train_set, validation_set = validation_set,
+  final_variables = final_variables, max_score = 100,
+  categorize = "quantile", quantiles = c(0, 0.05, 0.2, 0.8, 0.95, 1)
+)
+```
+
+fine-tune initial score
+```{r}
+# Example 1: rounding up to a nice number
+cut_vec$Age <- c(35, 50, 75, 90)
+
+# Example 2: changing cutoffs according to clinical knowledge or preference 
+cut_vec$Age <- c(25, 50, 75, 90)
+
+# Example 3: combining categories
+cut_vec$Age <- c(50, 75, 90)
+```
+
+```{r}
+cut_vec$Lab_H <- c(0.2, 1, 3, 4)
+cut_vec$Lab_K <- c(10, 40)
+cut_vec$Lab_B <- c(10, 17)
+cut_vec$Vital_A <- c(70, 98)
+
+scoring_table <- AutoScore_fine_tuning(
+  train_set = train_set, validation_set = validation_set, 
+  final_variables = final_variables, cut_vec = cut_vec, max_score = 100
+)
+```
+
+evaluate final risk scores on test dataset
+```{r}
+pred_score <- AutoScore_testing(
+  test_set = test_set, final_variables = final_variables, cut_vec = cut_vec,
+  scoring_table = scoring_table, threshold = "best", with_label = TRUE
+)
+```
+```{r}
+head(pred_score)
+```
+
+```{r}
+print_roc_performance(pred_score$Label, pred_score$pred_score, threshold = 50)
+```
+
+Map score to risk
+```{r}
+conversion_table(pred_score = pred_score, 
+                 by = "risk", values = c(0.01, 0.05, 0.1, 0.2, 0.5))
+```
+
+```{r}
+conversion_table(pred_score = pred_score, 
+                 by = "score", values = c(20,40,60,75))
+```
+
+```{r}
+plot_predicted_risk(pred_score = pred_score, max_score = 100, 
+                    final_variables = final_variables, 
+                    scoring_table = scoring_table, point_size = 1)
+```
+
+```{r}
+write.csv(pred_score, file = "pred_score.csv")
+```
+
+
+Demo2: Small Sample
+```{r}
+data("sample_data_small")
+set.seed(4)
+out_split <- split_data(data = sample_data_small, ratio = c(0.7, 0, 0.3), 
+                        cross_validation = TRUE)
+train_set <- out_split$train_set
+validation_set <- out_split$validation_set
+test_set <- out_split$test_set
+```
+
+```{r}
+#rf
+ranking <- AutoScore_rank(train_set = train_set, method = "rf", ntree = 100)
+```
+
+```{r}
+#auc 
+ranking <- AutoScore_rank(train_set = train_set, method = "auc", 
+                          validation_set = validation_set)
+```
+```{r}
+AUC <- AutoScore_parsimony(
+  train_set = train_set, validation_set = validation_set, 
+  rank = ranking, max_score = 100, n_min = 1, n_max = 20,
+  categorize = "quantile", quantiles = c(0, 0.25, 0.5, 0.75, 1), 
+  auc_lim_min = 0.5, auc_lim_max = "adaptive",
+  cross_validation = TRUE, fold = 10, do_trace = FALSE
+)
+```
+```{r}
+write.csv(data.frame(AUC), file = "AUC.csv")
+```
+
+```{r}
+# Example 1: Top 6 variables are selected
+num_var <- 6
+final_variables <- names(ranking[1:num_var])
+
+# Example 2: Top 9 variables are selected
+num_var <- 9
+final_variables <- names(ranking[1:num_var])
+
+# Example 3: Top 6 variables, the 9th and 10th variable are selected
+num_var <- 6
+final_variables <- names(ranking[c(1:num_var, 9, 10)])
+```
+
+```{r}
+cut_vec <- AutoScore_weighting( 
+  train_set = train_set, validation_set = validation_set,
+  final_variables = final_variables, max_score = 100,
+  categorize = "quantile", quantiles = c(0, 0.25, 0.5, 0.75, 1)
+)
+```
+
+```{r}
+# Example 1: rounding up to a nice number
+cut_vec$Lab_K <- c(9, 45, 60)
+
+# Example 2: changing cutoffs according to clinical knowledge or preference 
+cut_vec$Lab_K <- c(15, 45, 60)
+
+# Example 3: combining categories
+cut_vec$Lab_K <- c(45, 60)
+```
+
+```{r}
+cut_vec$Lab_H <- c(1, 2, 3)
+cut_vec$Age <- c(35, 50, 80)
+cut_vec$Lab_B <- c(8, 12, 18)
+cut_vec$Vital_E <- c(15, 22)
+
+scoring_table <- AutoScore_fine_tuning(
+  train_set = train_set, validation_set = validation_set, 
+  final_variables = final_variables, cut_vec = cut_vec, max_score = 100
+)
+```
+
+```{r}
+pred_score <- AutoScore_testing(
+  test_set = test_set, final_variables = final_variables, cut_vec = cut_vec,
+  scoring_table = scoring_table, threshold = "best", with_label = TRUE
+)
+```
+
+```{r}
+head(pred_score)
+```
+
+```{r}
+print_roc_performance(pred_score$Label, pred_score$pred_score, threshold = 90)
+```
+AutoScore for survival outcomes (AutoScore-Survival)
+```{r}
+library(AutoScore)
+data("sample_data_survival")
+check_data_survival(sample_data_survival)
+```
+
+```{r}
+set.seed(4)
+out_split <- split_data(data = sample_data_survival, ratio = c(0.7, 0.1, 0.2))
+train_set <- out_split$train_set
+validation_set <- out_split$validation_set
+test_set <- out_split$test_set
+```
+
+```{r}
+ranking <- AutoScore_rank_Survival(train_set = train_set, ntree = 5)
+```
+
+```{r}
+iAUC <- AutoScore_parsimony_Survival(
+  train_set = train_set, validation_set = validation_set, 
+  rank = ranking, max_score = 100, n_min = 1, n_max = 20,
+  categorize = "quantile", quantiles = c(0, 0.05, 0.2, 0.8, 0.95, 1),
+  auc_lim_min = 0.5, auc_lim_max = "adaptive"
+)
+```
+```{r}
+write.csv(data.frame(iAUC), file = "iAUC.csv")
+```
+
+```{r}
+# Example 1: Top 6 variables are selected
+num_var <- 6
+final_variables <- names(ranking[1:num_var])
+
+# Example 2: Top 9 variables are selected
+num_var <- 9
+final_variables <- names(ranking[1:num_var])
+
+# Example 3: Top 6 variables, the 9th and 10th variable are selected
+num_var <- 6
+final_variables <- names(ranking[c(1:num_var, 9, 10)])
+```
+
+```{r}
+cut_vec <- AutoScore_weighting_Survival(
+  train_set = train_set, validation_set = validation_set, 
+  final_variables = final_variables, max_score = 100,
+  categorize = "quantile", quantiles = c(0, 0.05, 0.2, 0.8, 0.95, 1),
+  time_point = c(1, 3, 7, 14, 30, 60, 90)
+)
+```
+
+```{r}
+# Example 1: rounding up to a nice number
+cut_vec$Age <- c(35, 50, 75, 90)
+
+# Example 2: changing cutoffs according to clinical knowledge or preference 
+cut_vec$Age <- c(25, 50, 75, 90)
+
+# Example 3: combining categories
+cut_vec$Age <- c(50, 75, 90)
+```
+
+```{r}
+cut_vec$Lab_H <- c(0.2, 1, 3, 4)
+cut_vec$Lab_K <- c(10, 40)
+cut_vec$Lab_B <- c(10, 17)
+cut_vec$Vital_A <- c(70, 98)
+scoring_table <- AutoScore_fine_tuning_Survival(
+  train_set = train_set, validation_set = validation_set, 
+  final_variables = final_variables, cut_vec = cut_vec, max_score = 100,
+  time_point = c(1, 3, 7, 14, 30, 60, 90)
+)
+```
+
+```{r}
+pred_score <- AutoScore_testing_Survival(
+  test_set = test_set, final_variables = final_variables, cut_vec = cut_vec, 
+  scoring_table = scoring_table, threshold = "best", with_label = TRUE,
+  time_point = c(1, 3, 7, 14, 30, 60, 90)
+)
+```
+
+```{r}
+head(pred_score)
+```
+
+```{r}
+plot_survival_km(pred_score = pred_score, score_cut = c(50))
+```
+
+```{r}
+plot_survival_km(pred_score, score_cut = c(40, 50, 60))
+```
+
+```{r}
+conversion_table_survival(
+  pred_score = pred_score, score_cut = c(40,50,60), 
+  time_point = c(7, 14, 30, 60, 90)
+)
+```
+
+```{r}
+write.csv(pred_score, file = "pred_score.csv")
+```
+
+Demo: Small Sample
+```{r}
+data("sample_data_survival_small")
+```
+
+```{r}
+set.seed(4)
+out_split <- split_data(data = sample_data_survival_small, ratio = c(0.7, 0, 0.3), 
+                        cross_validation = TRUE)
+train_set <- out_split$train_set
+validation_set <- out_split$validation_set
+test_set <- out_split$test_set
+```
+
+```{r}
+ranking <- AutoScore_rank_Survival(train_set = train_set, ntree = 5)
+```
+
+```{r}
+iAUC <- AutoScore_parsimony_Survival(
+  train_set = train_set, validation_set = validation_set, rank = ranking,
+  max_score = 100, n_min = 1, n_max = 20,
+  categorize = "quantile", quantiles = c(0, 0.05, 0.2, 0.8, 0.95, 1),
+  auc_lim_min = 0.5, auc_lim_max = "adaptive",
+  cross_validation = TRUE, fold = 10, do_trace = FALSE
+)
+```
+```{r}
+write.csv(data.frame(iAUC), file = "iAUC.csv")
+```
+
+```{r}
+# Example 1: Top 6 variables are selected
+num_var <- 6
+final_variables <- names(ranking[1:num_var])
+
+# Example 2: Top 9 variables are selected
+num_var <- 9
+final_variables <- names(ranking[1:num_var])
+
+# Example 3: Top 6 variables, the 9th and 10th variable are selected
+num_var <- 6
+final_variables <- names(ranking[c(1:num_var, 9, 10)])
+```
+
+```{r}
+cut_vec <- AutoScore_weighting_Survival(
+  train_set = train_set, validation_set = validation_set, 
+  final_variables = final_variables, max_score = 100,
+  categorize = "quantile", quantiles = c(0, 0.05, 0.2, 0.8, 0.95, 1),
+  time_point = c(1, 3, 7, 14, 30, 60, 90)
+)
+```
+
+```{r}
+# Example 1: rounding up to a nice number
+cut_vec$Age <- c(35, 50, 75, 90)
+
+# Example 2: changing cutoffs according to clinical knowledge or preference 
+cut_vec$Age <- c(25, 50, 75, 90)
+
+# Example 3: combining categories
+cut_vec$Age <- c(50, 75, 90)
+```
+
+```{r}
+cut_vec$Lab_H <- c(0.2, 1, 3, 4)
+cut_vec$Lab_K <- c(10, 40)
+cut_vec$Lab_B <- c(10, 17)
+cut_vec$Vital_A <- c(70, 98)
+scoring_table <- AutoScore_fine_tuning_Survival(
+  train_set = train_set, validation_set = validation_set, 
+  final_variables = final_variables, cut_vec = cut_vec, max_score = 100,
+  time_point = c(1, 3, 7, 14, 30, 60, 90)
+)
+```
+
+```{r}
+pred_score <- AutoScore_testing_Survival(
+  test_set = test_set, final_variables = final_variables, cut_vec = cut_vec, 
+  scoring_table = scoring_table, threshold = "best", with_label = TRUE,
+  time_point = c(1, 3, 7, 14, 30, 60, 90)
+)
+```
+
+```{r}
+head(pred_score)
+```
+
+
+AutoScore for ordinal outcomes (AutoScore-Ordinal)
+```{r}
+library(AutoScore)
+data("sample_data_ordinal")
+dim(sample_data_ordinal)
+```
+
+```{r}
+head(sample_data_ordinal)
+```
+
+```{r}
+check_data_ordinal(sample_data_ordinal)
+```
+
+```{r}
+set.seed(4)
+out_split <- split_data(data = sample_data_ordinal, ratio = c(0.7, 0.1, 0.2), 
+                        strat_by_label = TRUE)
+train_set <- out_split$train_set
+validation_set <- out_split$validation_set
+test_set <- out_split$test_set
+```
+
+```{r}
+ranking <- AutoScore_rank_Ordinal(train_set = train_set, ntree = 100)
+```
+
+```{r}
+link <- "logit"
+mAUC <- AutoScore_parsimony_Ordinal(
+  train_set = train_set, validation_set = validation_set, 
+  rank = ranking, link = link, max_score = 100, n_min = 1, n_max = 20,
+  categorize = "quantile", quantiles = c(0, 0.05, 0.2, 0.8, 0.95, 1), 
+  auc_lim_min = 0, auc_lim_max = "adaptive"
+)
+```
+```{r}
+write.csv(data.frame(mAUC), file = "mAUC.csv")
+```
+
+```{r}
+# Example 1: Top 5 variables are selected
+num_var <- 5
+final_variables <- names(ranking[1:num_var])
+
+# Example 2: Top 14 variables are selected
+num_var <- 14
+final_variables <- names(ranking[1:num_var])
+
+# Example 3: Top 5 variables, the 11th and 14th variable are selected
+final_variables <- names(ranking[c(1:5, 11, 14)])
+```
+
+```{r}
+cut_vec <- AutoScore_weighting_Ordinal(
+  train_set = train_set, validation_set = validation_set, 
+  final_variables = final_variables, link = link, max_score = 100,
+  categorize = "quantile", quantiles = c(0, 0.05, 0.2, 0.8, 0.95, 1), 
+  n_boot = 10
+)
+```
+
+```{r}
+# Example 1: rounding to a nice number
+cut_vec$Age <- c(25, 45, 75, 85)
+
+# Example 2: changing cutoffs according to clinical knowledge or preference 
+cut_vec$Age <- c(25, 50, 75, 85)
+
+# Example 3: combining categories
+cut_vec$Age <- c(45, 75, 85)
+```
+
+```{r}
+cut_vec$Util_D <- c(2 / 3, 4 / 3, 4, 6)
+cut_vec$Vital_F <- c(17, 20, 25, 28)
+cut_vec$Vital_A <- c(60, 70, 95, 115)
+cut_vec$Lab_A <- c(45, 60, 135, 595)
+cut_vec$Age <- c(25, 45, 75, 85)
+scoring_table <- AutoScore_fine_tuning_Ordinal(
+  train_set = train_set, validation_set = validation_set,
+  final_variables = final_variables, link = link, cut_vec = cut_vec,
+  max_score = 100, n_boot = 10
+)
+```
+
+```{r}
+pred_score <- AutoScore_testing_Ordinal(
+  test_set = test_set, link = link, final_variables = final_variables, 
+  cut_vec = cut_vec, scoring_table = scoring_table, 
+  with_label = TRUE, n_boot = 10
+)
+```
+
+```{r}
+head(pred_score)
+```
+
+```{r}
+print_performance_ordinal(
+  label = pred_score$Label, score = pred_score$pred_score, 
+  n_boot = 10, report_cindex = TRUE
+)
+```
+
+```{r}
+plot_predicted_risk(pred_score = pred_score, max_score = 100, 
+                    final_variables = final_variables, link = link,
+                    scoring_table = scoring_table, point_size = 1)
+```
+
+```{r}
+conversion_table_ordinal(pred_score = pred_score, link = link,
+                         score_breaks = seq(from = 5, to = 70, by = 5), 
+                         digits = 4)
+```
+
+```{r}
+write.csv(pred_score, file = "pred_score.csv")
+```
+
+Demo: Small sample
+```{r}
+data("sample_data_ordinal_small")
+```
+
+```{r}
+set.seed(4)
+out_split <- split_data(data = sample_data_ordinal_small, ratio = c(0.7, 0, 0.3), 
+                        cross_validation = TRUE, strat_by_label = TRUE)
+train_set <- out_split$train_set
+validation_set <- out_split$validation_set
+test_set <- out_split$test_set
+```
+
+```{r}
+ranking <- AutoScore_rank_Ordinal(train_set = train_set, ntree = 100)
+```
+
+```{r}
+link <- "logit"
+mAUC <- AutoScore_parsimony_Ordinal(
+  train_set = train_set, validation_set = validation_set, link = link,
+  rank = ranking, max_score = 100, n_min = 1, n_max = 20,
+  categorize = "quantile", quantiles = c(0, 0.05, 0.2, 0.8, 0.95, 1), 
+  auc_lim_min = 0, auc_lim_max = "adaptive",
+  cross_validation = TRUE, fold = 10, do_trace = FALSE
+)
+```
+
+```{r}
+write.csv(data.frame(mAUC), file = "mAUC.csv")
+```
+
+```{r}
+# Example 1: Top 6 variables are selected
+num_var <- 6
+final_variables <- names(ranking[1:num_var])
+
+# Example 2: Top 14 variables are selected
+num_var <- 14
+final_variables <- names(ranking[1:num_var])
+
+# Example 3: Top 3 variables, the 10th and 15th variable are selected
+final_variables <- names(ranking[c(1:3, 10, 15)])
+```
+
+```{r}
+cut_vec <- AutoScore_weighting_Ordinal(
+  train_set = train_set, validation_set = validation_set, 
+  final_variables = final_variables, link = link, max_score = 100,
+  categorize = "quantile", quantiles = c(0, 0.05, 0.2, 0.8, 0.95, 1), 
+  n_boot = 10
+)
+```
+
+```{r}
+# Example 1: rounding to a nice number
+cut_vec$Age <- c(25, 45, 75, 85)
+
+# Example 2: changing cutoffs according to clinical knowledge or preference 
+cut_vec$Age <- c(25, 50, 75, 85)
+
+# Example 3: combining categories
+cut_vec$Age <- c(45, 75, 85)
+```
+
+```{r}
+cut_vec$Util_D <- c(2 / 3, 4 / 3, 4, 6)
+cut_vec$Lab_A <- c(45, 60, 135, 595)
+cut_vec$Age <- c(25, 45, 75, 85)
+cut_vec$Vital_A <- c(60, 70, 95, 115)
+scoring_table <- AutoScore_fine_tuning_Ordinal(
+  train_set = train_set, validation_set = validation_set, link = link,
+  final_variables = final_variables, cut_vec = cut_vec, max_score = 100, 
+  n_boot = 10
+)
+```
+
+```{r}
+pred_score <- AutoScore_testing_Ordinal(
+  test_set = test_set, link = link, final_variables = final_variables, 
+  cut_vec = cut_vec, scoring_table = scoring_table, 
+  with_label = TRUE, n_boot = 10
+)
+```
+
+```{r}
+head(pred_score)
+```
+
